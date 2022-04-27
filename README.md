@@ -8,6 +8,11 @@ in the GCC documentation under
 `gccarch` makes it easier to query the information presented
 in the ASCII-art table on that page.
 
+Note that `gccarch` treats question marks in the origina table
+as equivalent to an empty entry, meaning it does not differentiate
+between a feature _not_ being present on an architecture and a
+feature being of ambiguous status for an architecture.
+
 ## How to Use
 
 `gccarch` supports the following flags, which are exclusive of each other.
@@ -35,6 +40,12 @@ $ cargo install gccarch
 `gccarch` should now be installed. You can confirm this with
 `cargo install --list | grep gccarch`. Make sure your Cargo binary
 directory is in your `PATH` environment variable.
+
+## Why Was This Made?
+
+`gccarch` was made mostly as an excuse to practice working with
+`nom` (for parsing the ASCII table data) and `bitvec` (for storing
+the data about feature support for each architecture).
 
 ## License
 
