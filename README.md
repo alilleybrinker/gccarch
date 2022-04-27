@@ -8,7 +8,7 @@ in the GCC documentation under
 `gccarch` makes it easier to query the information presented
 in the ASCII-art table on that page.
 
-Note that `gccarch` treats question marks in the origina table
+Note that `gccarch` treats question marks in the original table
 as equivalent to an empty entry, meaning it does not differentiate
 between a feature _not_ being present on an architecture and a
 feature being of ambiguous status for an architecture.
