@@ -1,0 +1,18 @@
+[package]
+name = "archq"
+description = "Report architecture information from GCC's backends list."
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bitvec = { version = "1.0.0", default_features = false }
+clap = { version = "3.1.12", default_features = false, features = ["std", "derive"] }
+libc = "0.2.124"
+nom = "7.1.1"
+thiserror = "1.0.30"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
