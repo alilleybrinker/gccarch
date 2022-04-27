@@ -201,7 +201,7 @@ fn parse_arch_info(input: &'static str) -> IResult<&'static str, ArchInfo> {
     // At each step, update the value in the bitarray and increment the index.
     let step = |(mut idx, mut arch_info): (usize, ArchInfoArray), c| {
         // Hey, turns out for parsing purposes we only care about position!
-        arch_info.set(idx, c != " ");
+        arch_info.set(idx, c != " " && c != "?");
         idx += 1;
         (idx, arch_info)
     };
