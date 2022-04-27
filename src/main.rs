@@ -278,7 +278,7 @@ enum Feat {
     /// A hardware implementation does not exist.
     NoHardwareImpl = 0,
 
-    /// A hardware simulation is not currently being manufactured.
+    /// A hardware implementation is not currently being manufactured.
     HardwareImplNotManufactured,
 
     /// A free simulator does not exist.
@@ -391,7 +391,7 @@ impl Feat {
     fn description(&self) -> &'static str {
         match self {
             Feat::NoHardwareImpl => "a hardware implementation does not exist",
-            Feat::HardwareImplNotManufactured => "a hardware simulation is not currently being manufactured",
+            Feat::HardwareImplNotManufactured => "a hardware implementation is not currently being manufactured",
             Feat::NoFreeSim => "a free simulator does not exist",
             Feat::IntRegsLt32B => "integer registers are narrower than 32 bits",
             Feat::IntRegsGte64B => "integer registers are at least 64 bits wide",
