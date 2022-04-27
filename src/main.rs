@@ -14,14 +14,24 @@ use nom::{
     sequence::{delimited, separated_pair},
     IResult,
 };
-use std::fmt::Display;
-use std::{fmt, process::exit, result::Result as StdResult};
+use num_enum::{TryFromPrimitive, TryFromPrimitiveError};
+use std::{
+    convert::TryFrom as _,
+    fmt::{self, Display},
+    io::{self, Write},
+    ops::Not as _,
+    process::exit,
+    result::Result as StdResult,
+    str::FromStr,
+};
 use thiserror::Error;
 
 fn main() {
     // Report an error nicely if one arises.
     if let Err(e) = run() {
-        eprintln!("error: {}", e);
+        let mut o = io::stderr();
+        // Ignore an error here because we're exiting anyway.
+        let _ = writeln!(o, "error: {}", e);
         exit(EXIT_FAILURE);
     }
 }
@@ -34,40 +44,126 @@ fn run() -> Result<()> {
     // Load the architecture database.
     let arch_db = load_arch_info()?;
 
-    // Decide what to do based on the args.
-    match (args.arch.as_ref(), args.feat.as_ref()) {
-        // Enforce mutual exclusion of these arguments.
-        (Some(_), Some(_)) => Err(Error::ArchAndFeat),
+    exclusion_check(args)?;
 
-        // Ensure one of them is specified.
-        (None, None) => Err(Error::NothingRequested),
-
-        // Print a report about the selected architecture.
-        (Some(arch_name), None) => report_arch(arch_name, &arch_db),
-
-        // Print what architectures support a feature.
-        (None, Some(feat_name)) => report_feat(feat_name, &arch_db),
+    if args.arch.is_empty().not() {
+        return report_arch(&args.arch, &arch_db);
     }
+
+    if args.feat.is_empty().not() {
+        return report_feat(&args.feat, &arch_db);
+    }
+
+    if args.archs {
+        return print_all_archs(&arch_db);
+    }
+
+    if args.feats {
+        return print_all_feats(&arch_db);
+    }
+
+    Err(Error::NothingRequested)
+}
+
+fn exclusion_check(args: &Args) -> Result<()> {
+    let mut count = 0;
+    let mut offenders = vec![];
+
+    if args.arch.is_empty().not() {
+        count += 1;
+        offenders.push("--arch");
+    }
+
+    if args.feat.is_empty().not() {
+        count += 1;
+        offenders.push("--feat");
+    }
+
+    if args.archs {
+        count += 1;
+        offenders.push("--archs");
+    }
+
+    if args.feats {
+        count += 1;
+        offenders.push("--feats");
+    }
+
+    if count > 1 {
+        return Err(Error::ConflictingArgs {
+            offenders: offenders.join(", "),
+        });
+    }
+
+    Ok(())
 }
 
 /// Report on the selected architecture.
 fn report_arch(arch_name: &str, arch_db: &[Arch]) -> Result<()> {
     // Get the info for the selected architecture.
-    let info = arch_db
+    let arch = arch_db
         .iter()
         .find(|arch| arch.name == arch_name)
-        .map(|arch| &arch.info)
         .ok_or_else(|| Error::unknown_arch(arch_name))?;
 
-    println!("{}", arch_name);
-    println!("{}", info.0);
+    let mut o = io::stdout();
+
+    for idx in arch.info.0.iter_ones() {
+        let feat = Feat::try_from(idx as u8)?;
+        writeln!(o, "{}", feat)?;
+    }
+
+    Ok(())
+}
+
+/// Print all the known architectures.
+fn print_all_archs(arch_db: &[Arch]) -> Result<()> {
+    let mut o = io::stdout();
+
+    for arch in arch_db {
+        writeln!(o, "{}", arch.name)?;
+    }
 
     Ok(())
 }
 
 /// Report on the selected feature.
-fn report_feat(_feat_name: &str, _arch_db: &[Arch]) -> Result<()> {
-    todo!()
+fn report_feat(feat_name: &str, arch_db: &[Arch]) -> Result<()> {
+    let feat = Feat::from_str(feat_name)?;
+
+    let arch_iter = arch_db.iter().filter(|arch| {
+        let val = arch
+            .info
+            .0
+            .get(feat as usize)
+            .map(|val| *val as i32)
+            .unwrap_or(0);
+
+        val == 1
+    });
+
+    let mut o = io::stdout();
+
+    for arch in arch_iter {
+        writeln!(o, "{}", arch.name)?;
+    }
+
+    Ok(())
+}
+
+/// Print all known features.
+fn print_all_feats(_arch_db: &[Arch]) -> Result<()> {
+    let mut o = io::stdout();
+
+    for idx in 0..NUM_FIELDS {
+        let feat = Feat::try_from(idx as u8).unwrap();
+
+        if feat != Feat::Ignore {
+            writeln!(o, "{}", feat)?;
+        }
+    }
+
+    Ok(())
 }
 
 /// Load the architecture info and parse it.
@@ -170,9 +266,15 @@ type ArchInfoArray = bv::BitArr!(for NUM_FIELDS, in u8);
 struct ArchInfo(ArchInfoArray);
 
 /// The different features supported by the architectures.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
+#[repr(u8)]
 #[allow(unused)]
 enum Feat {
+    // Note that a 0 discriminant would be the default, but setting it explicitly
+    // makes it clearer here that the value of the discriminant matters, and that the
+    // order of the variants matters as well. They're used for indexing into the
+    // bitarray of features, so they need to be in exactly this order, as this is
+    // the order from the original GCC documentation which is replicated in the arch file.
     /// A hardware implementation does not exist.
     NoHardwareImpl = 0,
 
@@ -206,7 +308,7 @@ enum Feat {
     /// Architecture has a stack that grows upward.
     StackGrowsUp,
 
-    /// Placeholder for the space and should never be used
+    /// Placeholder for the space and should never be used.
     #[allow(unused)]
     Ignore,
 
@@ -221,7 +323,7 @@ enum Feat {
     /// Not necessarily supported by all subtargets.
     SwitchIlp32AndLp64,
 
-    /// Port uses `define_peephole` (as opposed to `define_peephole2`)
+    /// Port uses `define_peephole` (as opposed to `define_peephole2`).
     HasDefinePeephole,
 
     /// Port uses "* ..." notation for output template code.
@@ -255,9 +357,9 @@ enum Feat {
     ElfCorrectForSim,
 }
 
-impl Display for Feat {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let s = match self {
+impl Feat {
+    fn short_code(&self) -> &'static str {
+        match self {
             Feat::NoHardwareImpl => "H",
             Feat::HardwareImplNotManufactured => "M",
             Feat::NoFreeSim => "S",
@@ -283,9 +385,79 @@ impl Display for Feat {
             Feat::InstrsUseOneAsmInstrOrSplit => "t",
             Feat::ElfNotSupportedTarget => "e",
             Feat::ElfCorrectForSim => "s",
-        };
+        }
+    }
 
-        write!(f, "{}", s)
+    fn description(&self) -> &'static str {
+        match self {
+            Feat::NoHardwareImpl => "a hardware implementation does not exist",
+            Feat::HardwareImplNotManufactured => "a hardware simulation is not currently being manufactured",
+            Feat::NoFreeSim => "a free simulator does not exist",
+            Feat::IntRegsLt32B => "integer registers are narrower than 32 bits",
+            Feat::IntRegsGte64B => "integer registers are at least 64 bits wide",
+            Feat::MemNotByteAddrOrNot8B => "memory is not byte addressable, and/or bytes are not eight bits",
+            Feat::NoFloatInInstrSet => "floating point arithmetic is not included in the instruction set",
+            Feat::NoIeeeFloat => "architecture does not use IEEE format floating point numbers",
+            Feat::NoSingleCondCodeReg => "architecture does not have a single condition code register",
+            Feat::HasDelaySlots => "architecture has delay slots",
+            Feat::StackGrowsUp => "architecture has a stack that grows upward",
+            Feat::Ignore => "",
+            Feat::NoIlp32ModeIntArith => "port cannot use ILP32 mode integer arithmetic",
+            Feat::HasLp64ModeIntArith => "port can use LP64 mode integer arithmetic",
+            Feat::SwitchIlp32AndLp64 => "port can switch between ILP32 and LP64 at runtime",
+            Feat::HasDefinePeephole => "port uses `define_peephole` (as opposed to `define_peephole2`)",
+            Feat::StarDotsForOutputTemplates => "port uses \"* ...\" notation for output template code",
+            Feat::NoPrologueEpilogueForRtlExpanders => "port does not define prologue and/or epilogue RTL expanders",
+            Feat::NoDefineConstants => "port does not use `define_constants`",
+            Feat::NoDefineTargetAsmFunctionPrologueEpilogue => "port does not define `TARGET_ASM_FUNCTION_(PRO|EPI)LOGUE`",
+            Feat::MultiInheritanceThunksWithMacro => "port generates multiple inheritance thunks using `TARGET_ASM_OUTPUT_MI(_VCALL)_THUNK`",
+            Feat::PortUsesLraByDefault => "port uses LRA (by default, i.e. unless overriden by a switch)",
+            Feat::InstrsUseOneAsmInstrOrSplit => "all instructions either produce exactly one assembly instructions, or trigger a `define_split`",
+            Feat::ElfNotSupportedTarget => "`<arch>-elf` is not a supported target",
+            Feat::ElfCorrectForSim => "`<arch>-elf` is the correct target to use with the simulator in `/cvs/src`",
+        }
+    }
+}
+
+impl FromStr for Feat {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "H" => Ok(Feat::NoHardwareImpl),
+            "M" => Ok(Feat::HardwareImplNotManufactured),
+            "S" => Ok(Feat::NoFreeSim),
+            "L" => Ok(Feat::IntRegsLt32B),
+            "Q" => Ok(Feat::IntRegsGte64B),
+            "N" => Ok(Feat::MemNotByteAddrOrNot8B),
+            "F" => Ok(Feat::NoFloatInInstrSet),
+            "I" => Ok(Feat::NoIeeeFloat),
+            "C" => Ok(Feat::NoSingleCondCodeReg),
+            "B" => Ok(Feat::HasDelaySlots),
+            "D" => Ok(Feat::StackGrowsUp),
+            // This isn't actually a variant.
+            // " " => {},
+            "l" => Ok(Feat::NoIlp32ModeIntArith),
+            "q" => Ok(Feat::HasLp64ModeIntArith),
+            "r" => Ok(Feat::SwitchIlp32AndLp64),
+            "p" => Ok(Feat::HasDefinePeephole),
+            "b" => Ok(Feat::StarDotsForOutputTemplates),
+            "f" => Ok(Feat::NoPrologueEpilogueForRtlExpanders),
+            "m" => Ok(Feat::NoDefineConstants),
+            "g" => Ok(Feat::NoDefineTargetAsmFunctionPrologueEpilogue),
+            "i" => Ok(Feat::MultiInheritanceThunksWithMacro),
+            "a" => Ok(Feat::PortUsesLraByDefault),
+            "t" => Ok(Feat::InstrsUseOneAsmInstrOrSplit),
+            "e" => Ok(Feat::ElfNotSupportedTarget),
+            "s" => Ok(Feat::ElfCorrectForSim),
+            s => Err(Error::unknown_feat(s)),
+        }
+    }
+}
+
+impl Display for Feat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}: {}", self.short_code(), self.description())
     }
 }
 
@@ -306,32 +478,60 @@ enum Error {
     #[error("'{arch_name}' is not a known architecture")]
     UnknownArch { arch_name: String },
 
-    /// Indicates both --arch and --feat together.
-    #[error("can't specify both --arch and --feat together")]
-    ArchAndFeat,
+    /// Indicates conflicting arguments were specified.
+    #[error("can't specify {offenders} together")]
+    ConflictingArgs { offenders: String },
 
     /// Indicates neither --arch or --feat were specified.
     #[error("must specify either --arch or --feat")]
     NothingRequested,
+
+    /// The name of the feat isn't recognized.
+    #[error("'{feat_name}' is not a known feature")]
+    UnknownFeat { feat_name: String },
+
+    /// The feat could not be converted from a `u8`.
+    #[error("bad feat conversion")]
+    BadFeatConversion(#[from] TryFromPrimitiveError<Feat>),
+
+    /// Writing to stdout or stderr failed.
+    #[error("failed to write output")]
+    OutputFailed(#[from] io::Error),
 }
 
 impl Error {
+    /// Make an error for an unknown architecture.
     fn unknown_arch(arch_name: &str) -> Error {
         Error::UnknownArch {
             arch_name: arch_name.into(),
+        }
+    }
+
+    /// Make an error for an unknown feature.
+    fn unknown_feat(feat_name: &str) -> Error {
+        Error::UnknownFeat {
+            feat_name: feat_name.into(),
         }
     }
 }
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
-#[clap(author, version, about, long_about = None)]
+#[clap(version, about, long_about = None)]
 struct Args {
     /// The architecture to ask about.
-    #[clap(short, long)]
-    arch: Option<String>,
+    #[clap(short, long, default_value = "")]
+    arch: String,
+
+    /// Print all the architectures.
+    #[clap(short = 'A', long)]
+    archs: bool,
 
     /// The feature to request architectures that match.
-    #[clap(short, long)]
-    feat: Option<String>,
+    #[clap(short, long, default_value = "")]
+    feat: String,
+
+    /// Print all the features.
+    #[clap(short = 'F', long)]
+    feats: bool,
 }

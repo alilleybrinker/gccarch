@@ -9,6 +9,7 @@ bitvec = { version = "1.0.0", default_features = false }
 clap = { version = "3.1.12", default_features = false, features = ["std", "derive"] }
 libc = "0.2.124"
 nom = "7.1.1"
+num_enum = "0.5.7"
 thiserror = "1.0.30"
 
 [profile.dev]
